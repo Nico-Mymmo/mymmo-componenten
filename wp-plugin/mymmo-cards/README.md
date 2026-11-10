@@ -473,6 +473,10 @@ Uitzetten per site: `define('MYMMO_CARDS_GEEN_AUTO_UPDATE', true);` in
 
 ## Versies
 
+**1.17.5** — **Eerste versie uit het eigen project.** Geen wijziging aan de
+componenten: bewijst dat samenvoegen, uitbrengen en bijwerken vanuit
+`Nico-Mymmo/mymmo-componenten` werken.
+
 **1.17.4** — **Updates uit een eigen project.** De site haalt nieuwe versies
 voortaan bij `Nico-Mymmo/mymmo-componenten`, een openbaar project met enkel de
 componenten, in plaats van bij de repo van de Operations Manager. Zo kan die
