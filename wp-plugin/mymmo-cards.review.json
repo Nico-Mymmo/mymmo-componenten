@@ -1,8 +1,8 @@
 {
   "plugin": "mymmo-cards",
-  "versie": "1.17.4",
-  "hash": "a1c47fb841d7433e",
-  "datum": "2026-11-10T08:23:59.000Z",
+  "versie": "1.17.5",
+  "hash": "e6ef254a85b2aa28",
+  "datum": "2026-11-10T08:29:40.000Z",
   "door": "Nico-Mymmo",
-  "samenvatting": "Geen wijziging aan componenten of opmaak: enkel de bron van de updates (class-updates.php, REPO) gaat naar het nieuwe openbare project Nico-Mymmo/mymmo-componenten, plus versienummer 1.17.4 en de README-sectie. Visueel identiek aan 1.17.3."
+  "samenvatting": "Geen wijziging aan componenten of opmaak: enkel versienummer 1.17.5 en een README-sectie, als proef dat samenvoegen, uitbrengen en bijwerken vanuit het nieuwe project werken."
 }
