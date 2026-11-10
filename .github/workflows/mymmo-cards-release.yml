@@ -1,0 +1,146 @@
+# Mymmo Componenten uitbrengen: wat op master komt, gaat vanzelf naar de sites.
+#
+# Bij elke push naar master die de plugin raakt, en wanneer de job "Naar de
+# site" (huisstijl.yml) een component-branch samenvoegde -- die start deze
+# workflow zelf, want een samenvoeging met de GITHUB_TOKEN doet dat niet:
+#   1. de versie lezen uit mymmo-cards.php, en de vingerafdruk van de code;
+#   2. bestaat release mymmo-cards-vX.Y.Z al?
+#      - met dezelfde vingerafdruk (die van de tag, uit git): niets te doen;
+#      - met ANDERE code: fout -- nieuwe code hoort een nieuw versienummer;
+#   3. anders: bouwen met het bouwscript (dat de huisstijlcontrole en de review
+#      eist) en uitbrengen als release, met de zip eraan;
+#   4. de sites een seintje geven (POST /wp-json/mymmo-cards/v1/kijk), zodat ze
+#      meteen kijken in plaats van binnen het uur.
+#
+# De sites (wp-plugin/mymmo-cards/includes/class-updates.php) halen die release
+# zelf op. Ze nemen ENKEL een release die deze workflow maakte
+# (github-actions[bot]) en waarvan de commit op master staat. Het seintje draagt
+# geen code; het zegt enkel "kijk eens".
+
+name: Mymmo Componenten uitbrengen
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'wp-plugin/mymmo-cards/**'
+      - 'wp-plugin/mymmo-cards.review.json'
+      - 'wp-plugin/huisstijl/**'
+      - 'wp-plugin/build-mymmo-cards.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mymmo-cards-uitbrengen
+  cancel-in-progress: false
+
+jobs:
+  uitbrengen:
+    name: Uitbrengen
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Waar Mymmo Componenten op draait. Een site zonder de plugin (of met een
+      # versie van voor 1.9.2) antwoordt 404 en kijkt gewoon binnen het uur.
+      SITES: https://syndicoach.be https://openvme.be
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # de tags, om een bestaande versie te vergelijken
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Versie en vingerafdruk
+        id: versie
+        run: |
+          VERSIE=$(grep -m1 '^ \* Version:' wp-plugin/mymmo-cards/mymmo-cards.php | sed 's/.*Version: *//' | tr -d ' \r')
+          AFDRUK=$(node wp-plugin/huisstijl/controleer.mjs --afdruk)
+          echo "versie=$VERSIE" >> "$GITHUB_OUTPUT"
+          echo "afdruk=$AFDRUK" >> "$GITHUB_OUTPUT"
+          if gh release view "mymmo-cards-v$VERSIE" --json tagName >/dev/null 2>&1; then
+            echo "bestaat=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "bestaat=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Staat deze versie al uit?
+        if: steps.versie.outputs.bestaat == '1'
+        run: |
+          V="${{ steps.versie.outputs.versie }}"
+          # Uit git, niet uit de notities: zo telt dezelfde regel voor oude en
+          # nieuwe releases (de vingerafdruk wordt sinds 1.9.2 anders berekend).
+          OUD=$(node wp-plugin/huisstijl/controleer.mjs --afdruk "mymmo-cards-v$V")
+          if [ "$OUD" != "${{ steps.versie.outputs.afdruk }}" ]; then
+            echo "::error::Versie $V staat al uit, met andere code. Hoog het versienummer op (twee plekken in mymmo-cards.php + een sectie in README.md) en doe de review opnieuw."
+            exit 1
+          fi
+          echo "Versie $V staat al uit met precies deze code; niets te doen."
+
+      - name: Bouwen (controle + review)
+        if: steps.versie.outputs.bestaat == '0'
+        run: bash wp-plugin/build-mymmo-cards.sh "${{ steps.versie.outputs.versie }}"
+
+      - name: Uitbrengen
+        if: steps.versie.outputs.bestaat == '0'
+        run: |
+          V="${{ steps.versie.outputs.versie }}"
+          # De notities: de sectie van deze versie uit de README, tot de volgende.
+          awk -v kop="**$V**" '
+            index($0, kop) == 1 { aan = 1; print; next }
+            aan && (/^\*\*[0-9]+\.[0-9]+\.[0-9]+\*\*/ || /^## /) { exit }
+            aan { print }
+          ' wp-plugin/mymmo-cards/README.md > notities.md
+          printf '\n\nVingerafdruk: %s\n' "${{ steps.versie.outputs.afdruk }}" >> notities.md
+          gh release create "mymmo-cards-v$V" "wp-plugin/mymmo-cards-$V.zip" \
+            --target "$GITHUB_SHA" \
+            --title "Mymmo Componenten $V" \
+            --notes-file notities.md
+
+      - name: Sites laten kijken
+        if: steps.versie.outputs.bestaat == '0'
+        continue-on-error: true
+        run: |
+          for SITE in $SITES; do
+            CODE=$(curl -s -o antwoord.txt -w '%{http_code}' -X POST --max-time 20 "$SITE/wp-json/mymmo-cards/v1/kijk" || echo 000)
+            echo "$SITE: HTTP $CODE $(head -c 300 antwoord.txt 2>/dev/null || true)"
+          done
+
+      # Pas als de site het nieuwe nummer ZEGT, staat het erop. Zichtbaar als
+      # annotatie (zonder aanmelding te lezen, ook voor Claude), en rood als
+      # een site na tien minuten nog niet mee is.
+      - name: Staat het op de sites?
+        run: |
+          V="${{ steps.versie.outputs.versie }}"
+          TE_DOEN="$SITES"
+          for poging in $(seq 1 40); do
+            NOG=""
+            for SITE in $TE_DOEN; do
+              HIER=$(curl -s --max-time 10 "$SITE/wp-json/mymmo-cards/v1/versie" | sed -n 's/.*"versie":"\([^"]*\)".*/\1/p')
+              if [ "$HIER" = "$V" ]; then
+                echo "::notice title=Op de site::$SITE draait $V."
+              else
+                NOG="$NOG $SITE"
+              fi
+            done
+            TE_DOEN="$NOG"
+            [ -z "$TE_DOEN" ] && exit 0
+            sleep 15
+          done
+          # Een site die geen versie noemt (de plugin staat er niet op, of de
+          # site is onbereikbaar), is een waarschuwing; een site met een
+          # OUDERE versie is rood.
+          FOUT=0
+          for SITE in $TE_DOEN; do
+            HIER=$(curl -s --max-time 10 "$SITE/wp-json/mymmo-cards/v1/versie" | sed -n 's/.*"versie":"\([^"]*\)".*/\1/p')
+            if [ -z "$HIER" ]; then
+              echo "::warning title=Geen antwoord::$SITE noemt geen versie van Mymmo Componenten (niet geinstalleerd, of niet bereikbaar)."
+            else
+              echo "::error title=Niet op de site::$SITE draait na 10 minuten nog $HIER in plaats van $V. In de editor staat een melding met de knop 'Nu binnenhalen'; anders werkt de site zich binnen het uur zelf bij."
+              FOUT=1
+            fi
+          done
+          exit $FOUT

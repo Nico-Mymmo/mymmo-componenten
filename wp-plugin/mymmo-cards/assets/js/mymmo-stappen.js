@@ -1,0 +1,275 @@
+/**
+ * De stappen op de pagina: naast elkaar openschuiven tijdens het scrollen.
+ *
+ * Enkel op een computer (vanaf 782px, het breekpunt van WordPress en van de
+ * rest van deze plugin) en enkel als de reeks het wil (`data-mymmo-werkstappen`).
+ *
+ * DE PANELEN ZIJN ALTIJD EVEN HOOG: de ingestelde hoogte (`data-hoogte`,
+ * standaard 640px, een gewone laptop), of meer als een stap dat nodig heeft,
+ * maar nooit hoger dan het scherm onder de vaste kop. Is de inhoud van een stap hoger, dan krimpt het script die inhoud (en
+ * enkel die) tot ze past (`--mk-schaal`, zie mymmo-stappen.css). Tot 1.11.0
+ * vielen alle stappen in dat geval terug naar onder elkaar, elk met een eigen
+ * hoogte. Een schuifbalk in een paneel is geen uitweg: die hoort niet in een
+ * component. Enkel wie de inhoud onder MIN_SCHAAL zou moeten krimpen (een heel
+ * laag scherm, of een stap vol tekst), krijgt de stappen onder elkaar: kleinere
+ * tekst is dan niet meer te lezen.
+ *
+ * Hoe het werkt: de reeks krijgt een BAAN die zo hoog is als er te scrollen
+ * valt; daarin kleeft de RIJ met de panelen. Hoe ver je door de baan bent,
+ * bepaalt welk paneel open staat. Een dicht paneel is een knop: klikken (of
+ * Enter) scrolt naar zijn stuk van de baan.
+ *
+ * Wie beweging afwijst, krijgt geen animatie en springt bij een klik meteen.
+ * Het script schrijft enkel klassen en CSS-variabelen; wat ermee gebeurt,
+ * staat in mymmo-stappen.css.
+ */
+
+(function () {
+  'use strict';
+
+  var BREED = '(min-width: 782px)';
+  var RUSTIG = '(prefers-reduced-motion: reduce)';
+  /** Lucht onder het paneel, tot de onderrand van het scherm. */
+  var MARGE = 24;
+  /** Lager dan dit is een paneel geen paneel meer maar een strook. */
+  var MIN_PANEEL = 420;
+  /** Kleiner dan dit krimpt de inhoud van een stap niet: dan onder elkaar. */
+  var MIN_SCHAAL = 0.7;
+
+  function px(waarde) {
+    var getal = parseFloat(waarde);
+    return isNaN(getal) ? 0 : getal;
+  }
+
+  function Reeks(el) {
+    this.el = el;
+    this.baan = el.querySelector('.mymmo-werkstappen-baan');
+    this.rij = el.querySelector('.mymmo-werkstappen-rij');
+    this.stappen = [].slice.call(el.querySelectorAll('.mymmo-werkstappen-rij > .mymmo-werkstap'));
+    this.breed = window.matchMedia(BREED);
+    this.rustig = window.matchMedia(RUSTIG);
+    this.actief = -1;
+    this.aan = false;
+    this.afstand = 1;
+    this.boven = 0;
+    this.bezig = false;
+  }
+
+  Reeks.prototype.start = function () {
+    if (!this.baan || !this.rij || this.stappen.length < 2) {
+      return;
+    }
+    var zelf = this;
+
+    this.stappen.forEach(function (stap, n) {
+      stap.addEventListener('click', function () {
+        if (zelf.aan && n !== zelf.actief) {
+          zelf.ga(n);
+        }
+      });
+      stap.addEventListener('keydown', function (e) {
+        if (zelf.aan && n !== zelf.actief && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          zelf.ga(n);
+        }
+      });
+    });
+
+    window.addEventListener('scroll', function () {
+      if (zelf.aan && !zelf.bezig) {
+        zelf.bezig = true;
+        window.requestAnimationFrame(function () {
+          zelf.bezig = false;
+          zelf.volg();
+        });
+      }
+    }, { passive: true });
+
+    var wacht = null;
+    window.addEventListener('resize', function () {
+      window.clearTimeout(wacht);
+      wacht = window.setTimeout(function () { zelf.kies(); }, 150);
+    });
+    if (this.breed.addEventListener) {
+      this.breed.addEventListener('change', function () { zelf.kies(); });
+    }
+    // Lettertypes en beelden veranderen de hoogte van een stap: opnieuw meten.
+    window.addEventListener('load', function () { zelf.kies(); });
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () { zelf.kies(); });
+    }
+
+    this.kies();
+  };
+
+  /** Naast elkaar of onder elkaar? Altijd eerst terug naar onder elkaar. */
+  Reeks.prototype.kies = function () {
+    this.uit();
+    if (this.breed.matches) {
+      this.zetAan();
+    }
+  };
+
+  Reeks.prototype.zetAan = function () {
+    var el = this.el;
+    var stijl = window.getComputedStyle(el);
+    this.boven = px(stijl.getPropertyValue('--mk-boven'));
+
+    // Wat er op het scherm past, onder de vaste kop.
+    var ruimte = window.innerHeight - this.boven - MARGE;
+    if (ruimte < MIN_PANEEL) {
+      return;
+    }
+    var paneel = ruimte;
+
+    el.classList.add('mymmo-werkstappen--naast');
+    el.style.setProperty('--mk-paneel', paneel + 'px');
+
+    // Alles dicht: zo is de breedte van een dicht paneel te meten.
+    var dicht = this.stappen[0].getBoundingClientRect().width;
+    var tussen = px(window.getComputedStyle(this.rij).columnGap);
+    var open = this.rij.clientWidth - (this.stappen.length - 1) * (dicht + tussen);
+    el.style.setProperty('--mk-open', Math.floor(open) + 'px');
+
+    // Hoe hoog de panelen worden: de ingestelde hoogte (standaard die van
+    // een gewone laptop), zodat een groot scherm geen leeg vlak onder de
+    // tekst krijgt. Heeft een stap meer nodig, dan groeit het paneel mee tot
+    // het scherm vol is; pas daarna krimpt de inhoud. Altijd een hoogte voor
+    // alle stappen samen: zo blijven ze even hoog.
+    var gewenst = px(el.getAttribute('data-hoogte') || 0);
+    if (gewenst > 0) {
+      var nodig = this.stappen.reduce(function (max, stap) {
+        return Math.max(max, Reeks.nodig(stap));
+      }, 0);
+      paneel = Math.min(ruimte, Math.max(gewenst, Math.ceil(nodig)));
+      el.style.setProperty('--mk-paneel', paneel + 'px');
+    }
+
+    // Past elke stap? De inhoud staat al op de breedte van een open paneel,
+    // ook als het paneel dicht is, dus dit kan zonder iets te openen. Wat niet
+    // past, krimpt tot het past -- zo blijven de panelen even hoog.
+    var past = this.stappen.every(function (stap) {
+      return Reeks.pas(stap, paneel);
+    });
+    if (!past) {
+      this.uit();
+      return;
+    }
+
+    var perStap = window.innerHeight * px(el.getAttribute('data-scroll') || 55) / 100;
+    this.afstand = Math.max(1, perStap * this.stappen.length);
+    el.style.setProperty('--mk-baan', (paneel + this.afstand) + 'px');
+
+    this.aan = true;
+    this.actief = -1;
+    this.volg();
+  };
+
+  Reeks.prototype.uit = function () {
+    var el = this.el;
+    this.aan = false;
+    this.actief = -1;
+    el.classList.remove('mymmo-werkstappen--naast');
+    ['--mk-paneel', '--mk-open', '--mk-baan'].forEach(function (naam) {
+      el.style.removeProperty(naam);
+    });
+    this.stappen.forEach(function (stap) {
+      stap.style.removeProperty('--mk-schaal');
+      stap.classList.remove('is-open');
+      stap.removeAttribute('tabindex');
+      stap.removeAttribute('role');
+      stap.removeAttribute('aria-label');
+    });
+  };
+
+  /** Hoe hoog een stap moet zijn om haar inhoud op ware grootte te tonen. */
+  Reeks.nodig = function (stap) {
+    var s = window.getComputedStyle(stap);
+    var nummer = stap.querySelector('.mymmo-werkstap-nummer');
+    var inhoud = stap.querySelector('.mymmo-werkstap-inhoud');
+    return px(s.paddingTop) + px(s.paddingBottom)
+      + (nummer ? nummer.getBoundingClientRect().height : 0)
+      + (inhoud ? inhoud.getBoundingClientRect().height : 0);
+  };
+
+  /**
+   * Laat de inhoud van een stap in een paneel van deze hoogte passen. Twee
+   * keer meten: een gekrompen inhoud is ook breder (de breedte wordt mee
+   * gedeeld door de schaal), dus de regels lopen anders en de hoogte is niet
+   * precies te voorspellen. Geeft false als het enkel onder MIN_SCHAAL past.
+   */
+  Reeks.pas = function (stap, paneel) {
+    var s = window.getComputedStyle(stap);
+    var nummer = stap.querySelector('.mymmo-werkstap-nummer');
+    var inhoud = stap.querySelector('.mymmo-werkstap-inhoud');
+    if (!inhoud) {
+      return true;
+    }
+    var ruimte = paneel - px(s.paddingTop) - px(s.paddingBottom)
+      - (nummer ? nummer.getBoundingClientRect().height : 0);
+    if (ruimte <= 0) {
+      return false;
+    }
+
+    var schaal = 1;
+    for (var poging = 0; poging < 2; poging++) {
+      var hoog = inhoud.getBoundingClientRect().height;
+      if (hoog <= ruimte) {
+        return true;
+      }
+      schaal = Math.floor(schaal * ruimte / hoog * 1000) / 1000;
+      if (schaal < MIN_SCHAAL) {
+        return false;
+      }
+      stap.style.setProperty('--mk-schaal', String(schaal));
+    }
+    return inhoud.getBoundingClientRect().height <= ruimte;
+  };
+
+  /** Welk paneel hoort open bij deze scrollpositie? */
+  Reeks.prototype.volg = function () {
+    var r = this.baan.getBoundingClientRect();
+    var voortgang = Math.min(1, Math.max(0, (this.boven - r.top) / this.afstand));
+    this.open(Math.min(this.stappen.length - 1, Math.floor(voortgang * this.stappen.length)));
+  };
+
+  Reeks.prototype.open = function (index) {
+    if (index === this.actief) {
+      return;
+    }
+    this.actief = index;
+    this.stappen.forEach(function (stap, n) {
+      var open = n === index;
+      stap.classList.toggle('is-open', open);
+      if (open) {
+        stap.removeAttribute('tabindex');
+        stap.removeAttribute('role');
+        stap.removeAttribute('aria-label');
+        return;
+      }
+      var kop = stap.querySelector('h2, h3, h4');
+      stap.setAttribute('tabindex', '0');
+      stap.setAttribute('role', 'button');
+      stap.setAttribute('aria-label', 'Toon stap ' + (n + 1) + (kop ? ': ' + kop.textContent.trim() : ''));
+    });
+  };
+
+  /** Scrol naar het midden van het stuk baan van stap n. */
+  Reeks.prototype.ga = function (n) {
+    var y = window.scrollY + this.baan.getBoundingClientRect().top - this.boven
+      + this.afstand * (n + 0.5) / this.stappen.length;
+    window.scrollTo({ top: y, behavior: this.rustig.matches ? 'auto' : 'smooth' });
+  };
+
+  function init() {
+    [].slice.call(document.querySelectorAll('[data-mymmo-werkstappen]')).forEach(function (el) {
+      new Reeks(el).start();
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();

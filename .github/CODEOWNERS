@@ -1,0 +1,26 @@
+# Wie beslist over welk deel van dit project.
+#
+# STANDAARD IS ALLES VAN NICO. Een pull request die iets buiten de vrije map
+# raakt -- de vangrails, de workflows, de controle, het bouwscript -- wacht op
+# zijn goedkeuring, ook als de controles groen zijn.
+#
+# VRIJ (geen eigenaar): de componenten in wp-plugin/mymmo-cards en de stempel.
+# Daar voegt wie bouwt zelf samen, zodra de Huisstijlcontrole groen is
+# (job "Naar de site" in .github/workflows/huisstijl.yml).
+#
+# De LAATSTE regel die op een bestand past, wint. Werkt via de ruleset op
+# master (Require review from Code Owners + de verplichte controle
+# "Huisstijlcontrole"). Nico kan als beheerder rechtstreeks pushen.
+
+*                                                       @Nico-Mymmo
+
+# ── Vrij: hier voegt de bouwer zelf samen ──────────────────────────────────
+/wp-plugin/mymmo-cards/
+/wp-plugin/mymmo-cards.review.json
+
+# ── De vangrails: altijd Nico, ook binnen de vrije map ─────────────────────
+/wp-plugin/mymmo-cards/CLAUDE.md                        @Nico-Mymmo
+/wp-plugin/mymmo-cards/assets/css/mymmo-huisstijl.css   @Nico-Mymmo
+/wp-plugin/mymmo-cards/includes/class-huisstijl.php     @Nico-Mymmo
+/wp-plugin/mymmo-cards/includes/class-bewaking.php      @Nico-Mymmo
+/wp-plugin/mymmo-cards/includes/class-updates.php       @Nico-Mymmo
